@@ -56,10 +56,10 @@ class mcp_internet_search():
                 await session.initialize()
 
                 result = await session.list_tools()
-                print("🛠️ Available tools:", result)
+                print("Available tools:", result)
                 tools = result.tools
 
-                print("🔧 MCP tools:", [t.name for t in tools])
+                print("MCP tools:", [t.name for t in tools])
 
                 llm = ChatOpenAI(
                 model="gpt-4o-mini",
@@ -94,7 +94,7 @@ class mcp_internet_search():
                     return "I can answer this without using any tools."
 
                 # 5️⃣ Call tool
-                print(f"🛠️ Calling tool: {tool_name} with args {tool_args}")
+                print(f"Calling tool: {tool_name} with args {tool_args}")
 
                 tool_response = await session.call_tool(
                     tool_name,

@@ -222,10 +222,6 @@ def orchestrator_agent(state: AgentState) -> AgentState:
     """
 
 
-    # response = ollama.chat(
-    #     model="llama3:8b",
-    #     messages=[{"role": "user", "content": prompt}],
-    # )
     llm = ChatOpenAI(
         model="gpt-4o-mini",
         temperature=0
