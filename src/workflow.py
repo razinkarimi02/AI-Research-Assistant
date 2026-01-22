@@ -339,4 +339,4 @@ async def run_workflow(query: str, files: list[str], logger) -> str:
     logger.info("Final state steps: %s", final_state["steps"])
     logger.info("Workflow completed for query: %s", query)
 
-    return final_state.get("final_answer") or final_state.get("response", "")
+    return final_state.get("final_answer") 
