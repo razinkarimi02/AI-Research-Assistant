@@ -142,7 +142,7 @@ def rag_agent(state: AgentState) -> AgentState:
 
     final_docs = [doc for doc, _ in reranked]
 
-    print("Final Reranked Docs: ",final_docs)
+    # print("Final Reranked Docs: ",final_docs)
 
     context = "\n\n".join(d.page_content for d in final_docs)
     # print("Final Context: ",context)
@@ -178,48 +178,54 @@ def orchestrator_agent(state: AgentState) -> AgentState:
     query = state["query"]
     research_notes = state.get("research_agent", [])
     documents = state.get("documents", [])
-    # print("o-doc: ",documents)
     iteration = state.get("iteration", 0)
 
     prompt = f"""
-    You are an orchestration agent in a multi-step AI system.
+        You are an orchestration agent in a multi-step AI system.
 
-    Your job is to decide the NEXT action to take based on the user query and available information.
+        Your job is to decide the NEXT action to take based on the user query and the current system state.
 
-    User query:
-    {query}
+        User query:
+        {query}
 
-    Available information:
+        Existing response from previous agent:
+        {state.get("response", "")}
 
-    Internet research notes:
-    {research_notes if research_notes else "None"}
+        Available information:
 
-    Retrieved documents (from user files):
-    {len(documents)} document chunks available
+        Internet research notes:
+        {research_notes if research_notes else "None"}
 
-    Iteration count:
-    {iteration}
+        Retrieved documents (from user files):
+        {len(documents)} document chunks available
 
-    Decision rules:
-    - If the query can be confidently answered using existing information → end
-    - If the query doesn't require any tool connection or document retrieval → end
-    - If documents exist AND they are relevant to the query → rag
-    - If information is missing AND documents are insufficient → research
-    - Avoid unnecessary research if documents already contain the answer
-    - Never exceed 5 iterations
+        Iteration count:
+        {iteration}
 
-    RESPONSE FORMAT STRICTLY:
-    - Respond ONLY in valid JSON
-    - The "decision" field MUST be exactly one of: "research", "rag", "end"
-    - Do NOT use synonyms, abbreviations, or any other words like "search" or "lookup"
-    - Ensure your JSON is parseable
+        Decision rules:
+        - If the query is a greeting, casual message, or small talk (e.g., "hi", "hello", "hey") → end
+        - If a meaningful response already exists → end
+        - If the query can be confidently answered using existing information → end
+        - If the query doesn't require any tool connection or document retrieval → end
+        - If documents exist AND they are relevant to the query → rag
+        - If information is missing AND documents are insufficient → research
+        - Avoid unnecessary research if documents already contain the answer
+        - Never exceed 5 iterations
 
-    Schema:
-    {{
-        "decision": "research" | "rag" | "end",
-        "reason": "Explain your choice in one concise sentence."
-    }}
+        RESPONSE FORMAT STRICTLY:
+        - Respond ONLY in valid JSON
+        - The "decision" field MUST be exactly one of: "research", "rag", "end"
+        - Do NOT use synonyms, abbreviations, or any other words like "search" or "lookup"
+        - Ensure your JSON is parseable
+
+        Schema:
+        {{
+            "decision": "research" | "rag" | "end",
+            "reason": "Explain your choice in one concise sentence."
+        }}
     """
+
+    # print("Orchestrator Prompt: ",prompt)
 
 
     llm = ChatOpenAI(
@@ -227,16 +233,20 @@ def orchestrator_agent(state: AgentState) -> AgentState:
         temperature=0
         )
 
-    response = llm.ainvoke(
+    response = llm.invoke(
         prompt
     )
 
     try:
-        content = response["message"]["content"]
+        content = response.content
         decision_json = json.loads(content)
+        print("Orchestrator decision JSON:", decision_json)
         decision = decision_json.get("decision", "research")
-    except Exception:
+    except Exception as e:
+        print("Error:", e)
         decision = "research"
+
+
 
     # decision = "rag"
     # ---- Loop guard ----
@@ -291,29 +301,56 @@ async def internet_search(state: AgentState) -> AgentState:
     results = await(
         mcp.mcp_search(max_results=5)
     )
-    print("Proper results: ",results)
+    # print("Proper results: ",results)
 
     state["response"] = results
     state.setdefault("research_agent", []).append(results)
-    state["iteration"] = state.get("iteration", 0) + 1
     state["steps"] = state.get("steps", []) + ["internet_search"]
 
     return state
 
 
 async def final_answer_agent(state: AgentState) -> AgentState:
-    formatted_response = ollama.chat(
-        model="llama3:8b",
-        messages=[{
-            "role": "user",
-            "content": "This is the query: " + str(state.get("query", "")) + "\nResponse from llm: " + str(state.get("response", "")) + "\nIf the response is somewhat like this: I can answer this without using any tools, then generate a final answer based on your knowledge. Otherwise, provide a concise summary answer based on the information provided."
-        }],
-    )
+    prompt = f"""
+        You are a final answer generator.
 
-    print("Final formatted response: ",formatted_response)
+        Your job is to return ONLY the final answer that should be shown to the user.
+
+        STRICT RULES:
+        - Do NOT explain your reasoning
+        - Do NOT mention tools, models, agents, or internal decisions
+        - Do NOT restate the question
+        - Output plain text only
+
+        Behavior rules:
+        - If the user query is a greeting or casual message (hi, hello, hey, etc.),
+        respond with a short, friendly greeting.
+        - If an existing response is provided, refine or summarize it into a clear,
+        user-facing final answer.
+        - If the existing response is empty, answer directly using general knowledge.
+        - Keep the answer concise and user-focused.
+
+        User query:
+        {state.get("query", "")}
+
+        Existing response:
+        {state.get("response", "")}
+    """
+
+
+    llm = ChatOpenAI(
+        model="gpt-4o-mini",
+        temperature=0
+        )
+
+  
+    response = await llm.ainvoke(prompt)
+
+    print("Final formatted response:", response.content)
+
     return {
         **state,
-        "final_answer": formatted_response["message"]["content"]
+        "final_answer": response.content
     }
 
 
@@ -328,8 +365,9 @@ async def run_workflow(query: str, files: list[str], logger) -> str:
         "research_agent": [],
         "decision": "",
         "steps": [],
-        "iteration": 0,
-        "response": ""
+        "iteration": 1,
+        "response": "",
+        "final_answer": ""
     }
 
     logger.info("Starting workflow for query: %s", query)
@@ -339,4 +377,4 @@ async def run_workflow(query: str, files: list[str], logger) -> str:
     logger.info("Final state steps: %s", final_state["steps"])
     logger.info("Workflow completed for query: %s", query)
 
-    return final_state.get("final_answer") 
+    return final_state.get("final_answer")

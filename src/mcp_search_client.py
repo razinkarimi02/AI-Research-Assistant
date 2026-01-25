@@ -93,48 +93,46 @@ class mcp_internet_search():
             async with ClientSession(custom_read, custom_write) as custom_session, \
                     ClientSession(gh_read, gh_write) as gh_session:
 
-                # Initialize both
+                # Initialize
                 await custom_session.initialize()
                 await gh_session.initialize()
 
-                # List tools
+                # Discover tools
                 custom_tools = (await custom_session.list_tools()).tools
                 gh_tools = (await gh_session.list_tools()).tools
 
-                # Merge tools
                 all_tools = {t.name: ("custom", t) for t in custom_tools}
                 all_tools.update({t.name: ("github", t) for t in gh_tools})
 
-                print("Available MCP tools:", list(all_tools.keys()))
+                # print("Available MCP tools:", list(all_tools.keys()))
 
                 llm = ChatOpenAI(
                     model="gpt-4o-mini",
                     temperature=0
                 )
 
-                # 1️⃣ Tool decision
+                # Tool decision (LLM)
                 decision = await llm.ainvoke(
-                    f"{self.TOOL_PROMPT}\n\nUser query: {self.query}"
+                    f"{self.TOOL_PROMPT}\n\nUser query:\n{self.query}"
                 )
+                # print("LLM tool decision:", decision.content)
 
                 try:
                     tool_decision = json.loads(decision.content)
+                    print("Parsed tool decision:", tool_decision)
                 except Exception:
-                    return "I can answer this without using any tools."
+                    return decision.content
 
                 tool_name = tool_decision.get("tool")
                 tool_args = tool_decision.get("args", {})
 
                 if not tool_name or tool_name not in all_tools:
-                    return "I can answer this without using any tools."
+                    return decision.content
 
-                # 2️⃣ Tool allow-list (SECURITY)
+                # Security allow-list
                 ALLOWED_TOOLS = {
-                    # Tavily
                     "internet_search",
                     "arxiv_paper_search",
-
-                    # GitHub (examples)
                     "search_repositories",
                     "get_file_contents",
                     "list_issues",
@@ -143,23 +141,48 @@ class mcp_internet_search():
                 }
 
                 if tool_name not in ALLOWED_TOOLS:
-                    return "I can answer this without using any tools."
+                    return decision.content
 
-                print(f"Tool decision: {tool_name} with args {tool_args}")
                 source, _ = all_tools[tool_name]
+                print(f"Calling {source} tool: {tool_name} with args {tool_args}")
 
-                print(f"Calling {source} tool: {tool_name}")
-
-                # 3️⃣ Route call to correct MCP session
+                # Execute tool
                 if source == "custom":
-                    response = await custom_session.call_tool(tool_name, tool_args)
+                    tool_response = await custom_session.call_tool(tool_name, tool_args)
                 else:
-                    response = await gh_session.call_tool(
-                    tool_name, 
-                    {
-                        "q": tool_args["query"],
-                        "per_page": tool_args.get("max_results", 5),
-                    }
+                    tool_response = await gh_session.call_tool(
+                        tool_name,
+                        {
+                            "query": tool_args["query"],
+                            "per_page": tool_args.get("max_results", max_results),
+                        }
                     )
 
-                return self.textcontent_to_string(response.content)
+                tool_output = self.textcontent_to_string(tool_response.content)
+
+                # FINAL LLM CALL (THIS WAS MISSING)
+                final_prompt = f"""
+                    You are an AI assistant.
+
+                    User query:
+                    {self.query}
+
+                    Tool selected by LLM response:
+                    {decision}
+
+                    Tool selected:
+                    {tool_name}
+
+                    Tool arguments:
+                    {json.dumps(tool_args, indent=2)}
+
+                    Tool response:
+                    {tool_output}
+
+                    Using the tool response above, provide a clear and concise final answer to the user.
+                    Do NOT mention tools or internal decisions.
+                    """
+
+                final_answer = await llm.ainvoke(final_prompt)
+
+                return final_answer.content

@@ -9,3 +9,4 @@ class AgentState(TypedDict):
     steps: List[str]
     iteration: int
     response: str
+    final_answer: str
