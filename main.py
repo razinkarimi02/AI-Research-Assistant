@@ -1,3 +1,4 @@
+import logging
 import os
 import uvicorn
 import uuid
@@ -7,12 +8,16 @@ from waitress import serve
 from flask import Flask, jsonify, request
 from dotenv import load_dotenv
 import warnings
+import logging
 load_dotenv()
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore")
+logging.getLogger("httpx").setLevel(logging.ERROR)
+logging.getLogger("openai").setLevel(logging.ERROR)
+
 
 PORT = int(os.getenv("PORT", 8000))
 HOST = os.getenv("URL_SCHEMA", "0.0.0.0")
