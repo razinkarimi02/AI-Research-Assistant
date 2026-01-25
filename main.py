@@ -1,9 +1,6 @@
 import logging
 import os
-import uvicorn
 import uuid
-from fastapi import FastAPI
-from pydantic import BaseModel
 from waitress import serve
 from flask import Flask, jsonify, request
 from dotenv import load_dotenv

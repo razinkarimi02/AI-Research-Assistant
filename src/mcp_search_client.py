@@ -25,12 +25,17 @@ class mcp_internet_search():
 
             3. search_repositories(query)
             - Use to find GitHub repositories related to a topic, library, or project.
+            - Returns repository names, descriptions, and URLs.
 
             4. search_code(query)
             - Use to search for specific implementations, functions, or patterns in GitHub code.
+            - Returns file paths and code snippets from matching files.
+            - PREFER this when user asks for code examples or implementations.
 
             5. get_file_contents(owner, repo, path)
             - Use to read a specific file from a GitHub repository.
+            - Requires: owner (username/org), repo (repository name), path (file path in repo)
+            - Use this when you know the exact file location.
 
             6. list_issues(owner, repo)
             - Use to inspect open issues, bugs, or discussions in a GitHub repo.
@@ -40,12 +45,16 @@ class mcp_internet_search():
 
             Guidelines:
             - Choose EXACTLY ONE tool if a tool is required.
+            - When user asks for "code", "implementation", "example", or "how to":
+              - Use search_code to find relevant code snippets
+            - When user asks about a specific repo's file:
+              - Use get_file_contents with owner, repo, and path
             - Prefer GitHub tools for:
-            - Code, implementations, repos, issues, PRs
+              - Code, implementations, repos, issues, PRs
             - Prefer arxiv_paper_search for:
-            - Academic papers, surveys, research work
+              - Academic papers, surveys, research work
             - Prefer internet_search for:
-            - Everything else
+              - Everything else (tutorials, docs, news)
             - If no tool is needed, return null.
 
             Respond ONLY in valid JSON.
@@ -57,6 +66,16 @@ class mcp_internet_search():
             "args": {
                 "query": "...",
                 "max_results": 5
+            }
+            }
+            
+            For get_file_contents, use this format:
+            {
+            "tool": "get_file_contents",
+            "args": {
+                "owner": "username",
+                "repo": "repository-name",
+                "path": "path/to/file.py"
             }
             }
         """
@@ -150,15 +169,64 @@ class mcp_internet_search():
                 if source == "custom":
                     tool_response = await custom_session.call_tool(tool_name, tool_args)
                 else:
-                    tool_response = await gh_session.call_tool(
-                        tool_name,
-                        {
-                            "query": tool_args["query"],
+                    # Build proper arguments for different GitHub tools
+                    gh_tool_args = {}
+                    
+                    if tool_name in ["search_repositories", "search_code"]:
+                        gh_tool_args = {
+                            "query": tool_args.get("query", ""),
                             "per_page": tool_args.get("max_results", max_results),
                         }
-                    )
+                    elif tool_name == "get_file_contents":
+                        gh_tool_args = {
+                            "owner": tool_args.get("owner", ""),
+                            "repo": tool_args.get("repo", ""),
+                            "path": tool_args.get("path", ""),
+                        }
+                    elif tool_name in ["list_issues", "list_pull_requests"]:
+                        gh_tool_args = {
+                            "owner": tool_args.get("owner", ""),
+                            "repo": tool_args.get("repo", ""),
+                        }
+                    else:
+                        gh_tool_args = tool_args
+                    
+                    tool_response = await gh_session.call_tool(tool_name, gh_tool_args)
 
                 tool_output = self.textcontent_to_string(tool_response.content)
+                
+                # If search returned results with URLs, try to fetch actual code content
+                if tool_name == "search_code" and isinstance(tool_output, (list, str)):
+                    # Parse results to extract file info and fetch content
+                    try:
+                        search_results = json.loads(tool_output) if isinstance(tool_output, str) else tool_output
+                        if isinstance(search_results, list) and len(search_results) > 0:
+                            # Try to get actual file contents for top results
+                            code_contents = []
+                            for item in search_results[:3]:  # Limit to top 3 results
+                                if isinstance(item, dict):
+                                    owner = item.get("owner", item.get("repository", {}).get("owner", {}).get("login", ""))
+                                    repo = item.get("repo", item.get("repository", {}).get("name", ""))
+                                    path = item.get("path", "")
+                                    
+                                    if owner and repo and path:
+                                        try:
+                                            file_response = await gh_session.call_tool(
+                                                "get_file_contents",
+                                                {"owner": owner, "repo": repo, "path": path}
+                                            )
+                                            file_content = self.textcontent_to_string(file_response.content)
+                                            code_contents.append({
+                                                "file": f"{owner}/{repo}/{path}",
+                                                "content": file_content
+                                            })
+                                        except Exception as e:
+                                            print(f"Could not fetch file {path}: {e}")
+                            
+                            if code_contents:
+                                tool_output = json.dumps(code_contents, indent=2)
+                    except Exception as e:
+                        print(f"Error enhancing search results: {e}")
 
                 # FINAL LLM CALL (THIS WAS MISSING)
                 final_prompt = f"""
@@ -180,6 +248,8 @@ class mcp_internet_search():
                     {tool_output}
 
                     Using the tool response above, provide a clear and concise final answer to the user.
+                    If the response contains code, format it properly with syntax highlighting.
+                    If only URLs/links were returned, explain what was found and suggest the user may want to explore those links.
                     Do NOT mention tools or internal decisions.
                     """
 
